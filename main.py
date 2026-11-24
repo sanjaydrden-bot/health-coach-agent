@@ -600,7 +600,21 @@ def make_voice(data, out_mp3):
         voice = C("TTS_VOICE_EN", "en-IN-PrabhatNeural")
     if not text:
         raise RuntimeError("video script khali hai")
-    asyncio.run(edge_tts.Communicate(text, voice, rate=C("TTS_RATE", "+5%")).save(out_mp3))
+    rate = C("TTS_RATE", "+5%").replace("%%", "%")
+    tries = [(text, voice, rate), (text, voice, "+0%")]
+    roman = (data.get("video_script") or "").strip()
+    if roman:
+        tries += [(roman, C("TTS_VOICE_HI", "hi-IN-MadhurNeural"), "+0%"), (roman, "en-IN-PrabhatNeural", "+0%")]
+    last = None
+    for t_, v_, r_ in tries:
+        try:
+            asyncio.run(edge_tts.Communicate(t_, v_, rate=r_).save(out_mp3))
+            if audio_seconds(out_mp3) >= 3:
+                return out_mp3
+        except Exception as e:
+            last = e
+            log(f"Awaaz try fail ({v_}, {r_}): {str(e)[:60]}")
+    raise RuntimeError(f"awaaz nahi bani: {last}")
     if audio_seconds(out_mp3) < 3:
         raise RuntimeError("awaaz file sahi nahi bani")
     return out_mp3
