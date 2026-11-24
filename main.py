@@ -1399,7 +1399,7 @@ def cmd_generate(force=False):
                 vb64 = base64.b64encode(open(vpath, "rb").read()).decode()
         except Exception as e:
             log(f"Clone video nahi bana, poster wala video banega: {e}")
-    if video_kind == "poster" and C("FREE_VIDEO", "yes").lower() == "yes":
+    if video_kind == "poster" and C("FREE_VIDEO", "no").lower() == "yes":
         try:
             make_free_video(script_parts_from_data(data), vpath, data.get("topic", ""), photo)
             video_kind = "free"
