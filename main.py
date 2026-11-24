@@ -732,6 +732,232 @@ def make_story_short(data, photo_path, out_path, voice=None):
     return out_path
 
 
+PART_LABELS = {"hook": 0, "sawal": 0, "problem": 1, "solution": 2, "hal": 2, "upay": 2,
+               "cta": 3, "subscribe": 3}
+DEFAULT_CTA = "Aise hi health tips ke liye The Health Coach ko subscribe karein."
+
+
+def parse_script(text):
+    """'Hook: ... / Problem: ... / Solution: ... / CTA: ...' wali script ko 4 hisson mein todta hai."""
+    parts = ["", "", "", ""]
+    loose = []
+    for raw in str(text).splitlines():
+        ln = raw.strip().lstrip("*-•0123456789.) ").strip()
+        if not ln:
+            continue
+        m = re.match(r"^([A-Za-z]+)\s*[:\-]\s*(.+)$", ln)
+        key = m.group(1).lower() if m else ""
+        if m and key in PART_LABELS:
+            parts[PART_LABELS[key]] = m.group(2).strip().strip('"“”\' ')
+        else:
+            loose.append(ln.strip('"“”\' '))
+    if not any(parts) and loose:
+        sents = re.split(r"(?<=[?.!।])\s+", " ".join(loose))
+        sents = [s for s in sents if s.strip()]
+        n = max(1, len(sents))
+        cuts = [0, max(1, n // 4), max(2, n // 2), max(3, n - 1)]
+        for i in range(4):
+            a = cuts[i]
+            b = cuts[i + 1] if i < 3 else n
+            parts[i] = " ".join(sents[a:b]).strip()
+    if not parts[3]:
+        parts[3] = DEFAULT_CTA
+    return [p for p in parts if p]
+
+
+def script_parts_from_data(data):
+    vp = [str(p).strip() for p in (data.get("voice_parts") or []) if str(p).strip()]
+    if len(vp) >= 3 and not any(p.lower().startswith("spoken ") for p in vp):
+        return vp[:4]
+    sc = data.get("scenes") or {}
+    parts = [sc.get("hook"), sc.get("problem"), sc.get("solution"), sc.get("cta") or DEFAULT_CTA]
+    if all(parts):
+        return parts
+    return parse_script(data.get("video_script") or data.get("poster_title", ""))
+
+
+def hindi_and_queries(parts, topic=""):
+    """Gemini se: har hisse ka Devanagari (awaaz ke liye) + stock video search words."""
+    ask = ("For each numbered Hinglish line below give (a) the same line in natural Devanagari Hindi for a "
+           "Hindi text-to-speech voice (write English words like fiber, water, subscribe, The Health Coach in "
+           "Devanagari too) and (b) 2-3 simple English words to search a matching stock VIDEO clip "
+           "(bright, positive, no doctors, no medicines, no sick or sad people, no text). Topic: " + str(topic) +
+           "\n" + "\n".join(f"{i + 1}. {p}" for i, p in enumerate(parts)) +
+           '\nReply with ONLY JSON: {"hi": ["..."], "q": ["..."]} with exactly ' + str(len(parts)) + " items each.")
+    try:
+        txt = gemini_any(ask, rounds=2)
+        j = json.loads(re.search(r"\{.*\}", txt, re.S).group(0))
+        hi, q = list(j.get("hi") or []), list(j.get("q") or [])
+        if len(hi) == len(parts) and len(q) == len(parts):
+            return hi, q
+    except Exception as e:
+        log(f"Hindi/keywords AI se nahi mile ({str(e)[:60]}), seedha script use hogi")
+    return list(parts), ["healthy lifestyle"] * len(parts)
+
+
+def free_tts(text_hi, text_roman, out_mp3):
+    """Free Hindi awaaz: Google (gTTS), warna Microsoft (edge-tts)."""
+    errs = []
+    try:
+        from gtts import gTTS
+        gTTS(text_hi, lang="hi").save(out_mp3)
+        if audio_seconds(out_mp3) > 0.5:
+            return out_mp3
+    except Exception as e:
+        errs.append(f"gTTS: {str(e)[:60]}")
+    try:
+        import asyncio
+        import edge_tts
+        asyncio.run(edge_tts.Communicate(text_hi, C("TTS_VOICE_HI", "hi-IN-MadhurNeural"), rate="+0%").save(out_mp3))
+        if audio_seconds(out_mp3) > 0.5:
+            return out_mp3
+    except Exception as e:
+        errs.append(f"edge: {str(e)[:60]}")
+    try:
+        from gtts import gTTS
+        gTTS(text_roman, lang="hi").save(out_mp3)
+        if audio_seconds(out_mp3) > 0.5:
+            return out_mp3
+    except Exception as e:
+        errs.append(f"gTTS roman: {str(e)[:60]}")
+    raise RuntimeError("awaaz nahi bani: " + " | ".join(errs))
+
+
+def pixabay_clip(query, out_path, used):
+    """Pixabay se free stock video clip (pehle portrait, phir koi bhi)."""
+    key = C("PIXABAY_API_KEY")
+    if not key:
+        return None
+    for q in (query, "healthy lifestyle", "fresh fruits vegetables", "nature morning"):
+        try:
+            r = requests.get("https://pixabay.com/api/videos/", params={
+                "key": key, "q": q, "safesearch": "true", "per_page": 30, "video_type": "film"}, timeout=60)
+            hits = [h for h in r.json().get("hits", []) if h["id"] not in used and 4 <= h.get("duration", 0) <= 60]
+            hits.sort(key=lambda h: (h["videos"]["medium"].get("height", 0) <= h["videos"]["medium"].get("width", 1),
+                                     -h.get("likes", 0)))
+            for h in hits[:5]:
+                v = h["videos"].get("medium") or h["videos"].get("small")
+                if not v or not v.get("url"):
+                    continue
+                data = requests.get(v["url"], timeout=120, headers=UA).content
+                if len(data) < 50_000:
+                    continue
+                with open(out_path, "wb") as f:
+                    f.write(data)
+                used.add(h["id"])
+                return out_path
+        except Exception as e:
+            log(f"Pixabay video '{q}' nahi mila: {str(e)[:60]}")
+    return None
+
+
+def caption_png(text, idx, out_path):
+    """Neeche subtitle + upar chhota logo, transparent PNG."""
+    SW, SH = 1080, 1920
+    img = Image.new("RGBA", (SW, SH), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    for size in (64, 58, 52, 46):
+        ft = font(True, size)
+        lines = wrap(d, text, ft, SW - 180)
+        if len(lines) <= 4:
+            break
+    lh = int(size * 1.25)
+    boxh = len(lines) * lh + 60
+    y0 = 1380 - boxh // 2
+    d.rounded_rectangle([60, y0, SW - 60, y0 + boxh], 34, fill=(15, 23, 42, 190))
+    accent = [ORANGE, (220, 38, 38), GREEN, ORANGE][idx % 4]
+    d.rounded_rectangle([60, y0, 76, y0 + boxh], 8, fill=accent + (255,))
+    y = y0 + 30
+    for ln in lines:
+        d.text(((SW - d.textlength(ln, font=ft)) / 2, y), ln, font=ft, fill="white")
+        y += lh
+    logo = find_logo()
+    if logo:
+        lg = logo.copy()
+        lg.thumbnail((260, 90), Image.LANCZOS)
+        d.rounded_rectangle([40, 60, 40 + lg.width + 24, 60 + lg.height + 16], 14, fill=(255, 255, 255, 235))
+        img.paste(lg, (52, 68), lg)
+    img.save(out_path)
+    return out_path
+
+
+def end_card(out_path):
+    SW, SH = 1080, 1920
+    img = Image.new("RGB", (SW, SH), DARK)
+    d = ImageDraw.Draw(img)
+    for y in range(SH):
+        t = y / SH
+        d.line([(0, y), (SW, y)], fill=tuple(int(DARK[i] * (1 - t) + GREEN[i] * t * 0.6) for i in range(3)))
+    logo = find_logo()
+    y = 560
+    if logo:
+        lg = logo.copy()
+        lg.thumbnail((640, 260), Image.LANCZOS)
+        x = (SW - lg.width - 48) // 2
+        d.rounded_rectangle([x, y, x + lg.width + 48, y + lg.height + 36], 28, fill="white")
+        img.paste(lg, (x + 24, y + 18), lg)
+        y += lg.height + 110
+    f1, f2 = font(True, 64), font(False, 42)
+    for t, f, c in (("SUBSCRIBE karein", f1, ORANGE), ("Free guidance: Call / WhatsApp", f2, (203, 213, 225)),
+                    (C("PHONE", "8982264044"), f1, (255, 255, 255))):
+        d.text(((SW - d.textlength(t, font=f)) / 2, y), t, font=f, fill=c)
+        y += 100
+    img.save(out_path, quality=93)
+    return out_path
+
+
+def make_free_video(parts, out_path, topic="", photo_path=None):
+    """Free video: har hisse ke liye stock clip + Hindi awaaz + subtitle, aakhir mein logo/subscribe card."""
+    import subprocess
+    ff = ffmpeg_exe()
+    hi, qs = hindi_and_queries(parts, topic)
+    used, segs, auds = set(), [], []
+    for i, part in enumerate(parts):
+        mp3 = os.path.join(OUT, f"_fv_a{i}.mp3")
+        free_tts(hi[i], part, mp3)
+        dur = audio_seconds(mp3) + 0.15
+        auds.append(mp3)
+        clip = pixabay_clip(qs[i], os.path.join(OUT, f"_fv_c{i}.mp4"), used)
+        cap = caption_png(part, i, os.path.join(OUT, f"_fv_t{i}.png"))
+        seg = os.path.join(OUT, f"_fv_s{i}.mp4")
+        if clip:
+            src = ["-stream_loop", "-1", "-i", clip]
+            base = "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30"
+        else:
+            bgimg = photo_path if photo_path and os.path.exists(photo_path) else end_card(os.path.join(OUT, "_fv_bg.jpg"))
+            src = ["-loop", "1", "-i", bgimg]
+            base = ("[0:v]scale=2160:3840:force_original_aspect_ratio=increase,crop=2160:3840,"
+                    "zoompan=z='min(1+0.0008*on,1.08)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1080x1920:fps=30")
+        flt = f"{base},eq=brightness=-0.07[b];[b][1:v]overlay=0:0,format=yuv420p[v]"
+        subprocess.run([ff, "-y"] + src + ["-loop", "1", "-i", cap, "-filter_complex", flt, "-map", "[v]",
+                        "-t", f"{dur:.2f}", "-r", "30", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                        "-an", seg], check=True, capture_output=True)
+        segs.append(seg)
+    endimg = end_card(os.path.join(OUT, "_fv_end.jpg"))
+    endseg = os.path.join(OUT, "_fv_end.mp4")
+    subprocess.run([ff, "-y", "-loop", "1", "-i", endimg, "-t", "2.5", "-r", "30", "-vf", "format=yuv420p",
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", endseg], check=True, capture_output=True)
+    segs.append(endseg)
+    vlist = os.path.join(OUT, "_fv_v.txt")
+    alist = os.path.join(OUT, "_fv_a.txt")
+    with open(vlist, "w") as f:
+        f.write("".join(f"file '{os.path.abspath(s)}'\n" for s in segs))
+    with open(alist, "w") as f:
+        f.write("".join(f"file '{os.path.abspath(a)}'\n" for a in auds))
+    total = sum(audio_seconds(a) + 0.15 for a in auds) + 2.5
+    music = os.path.join(BASE, "music.mp3")
+    cmd = [ff, "-y", "-f", "concat", "-safe", "0", "-i", vlist, "-f", "concat", "-safe", "0", "-i", alist]
+    if os.path.exists(music):
+        cmd += ["-stream_loop", "-1", "-i", music, "-filter_complex",
+                "[1:a]apad[va];[2:a]volume=0.10[m];[va][m]amix=inputs=2:duration=first:dropout_transition=0[a]",
+                "-map", "0:v", "-map", "[a]"]
+    else:
+        cmd += ["-map", "0:v", "-map", "1:a", "-af", "apad"]
+    cmd += ["-t", f"{total:.2f}", "-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", out_path]
+    subprocess.run(cmd, check=True, capture_output=True)
+    return out_path
+
+
 def make_short(poster_path, out_path, seconds=12, voice=None):
     """Poster -> 1080x1920 vertical video with slow zoom (+ Hindi awaaz + music.mp3 if present)."""
     import math
@@ -1165,6 +1391,16 @@ def cmd_generate(force=False):
                 vb64 = base64.b64encode(open(vpath, "rb").read()).decode()
         except Exception as e:
             log(f"Clone video nahi bana, poster wala video banega: {e}")
+    if video_kind == "poster" and C("FREE_VIDEO", "yes").lower() == "yes":
+        try:
+            make_free_video(script_parts_from_data(data), vpath, data.get("topic", ""), photo)
+            video_kind = "free"
+            log("Free video ban gaya (stock clips + Hindi awaaz).")
+            if os.path.getsize(vpath) < 30 * 1024 * 1024:
+                import base64
+                vb64 = base64.b64encode(open(vpath, "rb").read()).decode()
+        except Exception as e:
+            log(f"Free video nahi bana: {str(e)[:150]}")
     if video_kind == "poster" and C("VIDEO_ON_OTHER_DAYS", "no").lower() == "yes":
         voice = None
         if C("VOICEOVER", "yes").lower() == "yes":
