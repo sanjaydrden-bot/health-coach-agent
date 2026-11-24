@@ -12,7 +12,11 @@ on:
         description: "Kya chalana hai"
         type: choice
         default: publish
-        options: [publish, generate_now, performance, test]
+        options: [publish, generate_now, performance, test, sample_video]
+      script:
+        description: "Video script (sirf sample_video ke liye)"
+        required: false
+        default: ""
 
 concurrency:
   group: health-coach-agent
@@ -30,6 +34,7 @@ jobs:
       SCHEDULE: ${{ github.event.schedule }}
       CONFIG_INI: ${{ secrets.CONFIG_INI }}
       YOUTUBE_TOKEN: ${{ secrets.YOUTUBE_TOKEN }}
+      SCRIPT: ${{ github.event.inputs.script }}
     steps:
       - uses: actions/checkout@v4
 
