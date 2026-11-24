@@ -1,0 +1,9 @@
+# Ye files kabhi GitHub pe nahi jaani chahiye (keys/passwords)
+config.ini
+youtube_token.json
+client_secret*.json
+*.heygen.key
+log.txt
+__pycache__/
+posts/_*
+sheet_script.gs
