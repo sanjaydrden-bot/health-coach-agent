@@ -792,7 +792,15 @@ def hindi_and_queries(parts, topic=""):
             return hi, q
     except Exception as e:
         log(f"Hindi/keywords AI se nahi mile ({str(e)[:60]}), seedha script use hogi")
-    return list(parts), ["healthy lifestyle"] * len(parts)
+    kw = [("pet ", "fiber rich food"), ("constipation", "fiber rich food"), ("kabz", "fiber rich food"),
+          ("fiber", "fiber rich food"), ("paani", "drinking water"), ("water", "drinking water"),
+          ("walk", "people walking park"), ("activity", "people walking park"), ("exercise", "exercise workout"),
+          ("yoga", "yoga"), ("neend", "sleeping"), ("sleep", "sleeping"), ("fruit", "fresh fruits"),
+          ("fal ", "fresh fruits"), ("sabzi", "vegetables"), ("sugar", "healthy breakfast"),
+          ("diabetes", "healthy breakfast"), ("dil ", "jogging"), ("heart", "jogging"), ("stress", "meditation"),
+          ("tension", "meditation"), ("subscribe", "happy family"), ("health", "healthy lifestyle")]
+    qs = [next((q for k, q in kw if k in " " + p.lower() + " "), "healthy lifestyle") for p in parts]
+    return list(parts), qs
 
 
 def free_tts(text_hi, text_roman, out_mp3):
