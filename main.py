@@ -25,7 +25,7 @@ HISTORY = os.path.join(BASE, "history.json")
 LOG = os.path.join(BASE, "log.txt")
 os.makedirs(OUT, exist_ok=True)
 
-cfg = configparser.ConfigParser()
+cfg = configparser.ConfigParser(interpolation=None)
 cfg.read(os.path.join(BASE, "config.ini"), encoding="utf-8")
 
 
