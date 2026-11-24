@@ -1165,7 +1165,7 @@ def cmd_generate(force=False):
                 vb64 = base64.b64encode(open(vpath, "rb").read()).decode()
         except Exception as e:
             log(f"Clone video nahi bana, poster wala video banega: {e}")
-    if video_kind == "poster":
+    if video_kind == "poster" and C("VIDEO_ON_OTHER_DAYS", "no").lower() == "yes":
         voice = None
         if C("VOICEOVER", "yes").lower() == "yes":
             try:
@@ -1284,7 +1284,7 @@ def cmd_publish():
                 errors.append(f"IG: {e}")
         yt_id = row.get("yt_id") or ""
         video = os.path.join(OUT, f"{row.get('date', '')}.mp4")
-        if C("POST_TO_YOUTUBE", "yes").lower() == "yes" and not yt_id:
+        if C("POST_TO_YOUTUBE", "yes").lower() == "yes" and not yt_id and os.path.exists(video):
             try:
                 if not os.path.exists(video):
                     raise RuntimeError("video file nahi mili")
