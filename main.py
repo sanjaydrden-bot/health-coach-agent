@@ -271,8 +271,10 @@ Reply with ONLY this JSON, nothing else:
   "caption": "full caption text without hashtags",
   "hashtags": "#tag1 #tag2 ...",
   "photo_query": "2-4 English words to search a bright, positive stock photo (no doctors, no medicines, no sick people)",
-  "video_script": "a 30-35 second SPOKEN script (70-85 words) in natural Hinglish written in Roman letters, for the health coach to say on camera: first line a strong hook question, then the 3 tips in simple words, end with: Aisi aur tips ke liye follow karein, aur free guidance ke liye WhatsApp karein. No emojis, no hashtags, no headings.",
-  "voice_script_hi": "the SAME spoken script written in Devanagari Hindi script for a Hindi text-to-speech voice (write common English words like protein, vitamin, WhatsApp in Devanagari too). No emojis."}}"""
+  "scenes": {{"hook": "on-screen HOOK question in Hinglish Roman, max 10 words, e.g. Kya aapka bhi subah pet saaf nahi hota?", "problem": "on-screen PROBLEM line that names the viewer's pain, max 10 words, e.g. Constipation ki wajah se aap pareshan hain?", "solution": "on-screen SOLUTION line with the key tips, max 14 words, e.g. Fiber, adequate water aur physical activity par dhyan dein.", "cta": "Aise hi health tips ke liye The Health Coach ko subscribe karein."}},
+  "video_script": "a 25-35 second SPOKEN script (60-85 words) in natural Hinglish written in Roman letters, in EXACTLY this order: 1) HOOK - the hook question, 2) PROBLEM - relate to the viewer's pain, 3) SOLUTION - the 3 tips in simple words, 4) CTA - Aise hi health tips ke liye The Health Coach ko subscribe karein. No emojis, no hashtags, no headings.",
+  "voice_parts": ["spoken HOOK part", "spoken PROBLEM part", "spoken SOLUTION part", "spoken CTA part"],
+  "voice_script_hi": "the SAME spoken script (same 4 parts, same order) written in Devanagari Hindi script for a Hindi text-to-speech voice (write common English words like protein, vitamin, subscribe in Devanagari too). No emojis."}}"""
 
 
 def gemini(prompt, use_search=True, model=None):
@@ -618,6 +620,116 @@ def make_voice(data, out_mp3):
     if audio_seconds(out_mp3) < 3:
         raise RuntimeError("awaaz file sahi nahi bani")
     return out_mp3
+
+
+def story_scenes(data):
+    """Hook / Problem / Solution / CTA - AI se, warna poster ke content se."""
+    sc = data.get("scenes") or {}
+    pts = data.get("points") or []
+    return [
+        ("SAWAL", sc.get("hook") or (data.get("poster_title", "").rstrip("?") + "?")),
+        ("PROBLEM", sc.get("problem") or data.get("why_today") or data.get("topic", "")),
+        ("SOLUTION", sc.get("solution") or " | ".join(pts[:3])),
+        ("SUBSCRIBE", sc.get("cta") or "Aise hi health tips ke liye The Health Coach ko subscribe karein."),
+    ]
+
+
+def story_frame(label, text, bg, idx, out_path):
+    """Ek scene ka 1080x1920 card: photo background + bada text + logo footer."""
+    SW, SH = 1080, 1920
+    if bg is not None:
+        img = ImageOps.fit(bg, (SW, SH), Image.LANCZOS).filter(ImageFilter.GaussianBlur(6))
+        img = Image.blend(img, Image.new("RGB", (SW, SH), DARK), 0.62)
+    else:
+        img = Image.new("RGB", (SW, SH), DARK)
+        g = ImageDraw.Draw(img)
+        for y in range(SH):
+            t = y / SH
+            g.line([(0, y), (SW, y)], fill=tuple(int(DARK[i] * (1 - t) + GREEN[i] * t * 0.6) for i in range(3)))
+    d = ImageDraw.Draw(img)
+    colors = [ORANGE, (220, 38, 38), GREEN, ORANGE]
+    fl = font(True, 46)
+    lw = d.textlength(label, font=fl)
+    d.rounded_rectangle([(SW - lw) / 2 - 40, 430, (SW + lw) / 2 + 40, 520], 45, fill=colors[idx % 4])
+    d.text(((SW - lw) / 2, 448), label, font=fl, fill="white")
+    for size in (92, 84, 76, 68, 60, 54):
+        ft = font(True, size)
+        lines = wrap(d, text, ft, SW - 140)
+        if len(lines) * size * 1.2 <= 760:
+            break
+    y = 600 + (760 - len(lines) * int(size * 1.2)) // 2
+    for ln in lines:
+        d.text(((SW - d.textlength(ln, font=ft)) / 2, y), ln, font=ft, fill="white")
+        y += int(size * 1.2)
+    for i in range(4):  # progress dots
+        x = SW / 2 - 66 + i * 44
+        d.ellipse([x, 1460, x + 20, 1480], fill=(255, 255, 255) if i == idx else (100, 116, 139))
+    logo = find_logo()
+    if logo:
+        lg = logo.copy()
+        lg.thumbnail((420, 140), Image.LANCZOS)
+        x = (SW - lg.width - 32) // 2
+        d.rounded_rectangle([x, 1600, x + lg.width + 32, 1600 + lg.height + 20], 18, fill="white")
+        img.paste(lg, (x + 16, 1610), lg)
+    else:
+        f1 = font(True, 48)
+        d.text(((SW - d.textlength("The Health Coach", font=f1)) / 2, 1620), "The Health Coach", font=f1, fill="white")
+    f2 = font(False, 34)
+    num = "Call / WhatsApp " + C("PHONE", "8982264044")
+    d.text(((SW - d.textlength(num, font=f2)) / 2, 1790), num, font=f2, fill=(203, 213, 225))
+    img.save(out_path, quality=93)
+    return out_path
+
+
+def make_story_short(data, photo_path, out_path, voice=None):
+    """Hook -> Problem -> Solution -> CTA: 4 scene wala vertical Short (+ awaaz)."""
+    import subprocess
+    scenes = story_scenes(data)
+    bg = None
+    if photo_path:
+        try:
+            bg = Image.open(photo_path).convert("RGB")
+        except Exception:
+            bg = None
+    total = min(58.0, audio_seconds(voice) + 0.8) if voice else 14.0
+    words = [max(len(t.split()), 3) for _, t in scenes]
+    if voice and data.get("voice_parts"):
+        words = [max(len(str(p).split()), 3) for p in data["voice_parts"]][:4] or words
+    durs = [max(2.2, total * w / sum(words)) for w in words]
+    durs = [d * total / sum(durs) for d in durs]
+    fps = 30
+    cmd = [ffmpeg_exe(), "-y"]
+    for i, (label, text) in enumerate(scenes):
+        f = story_frame(label, text, bg, i, os.path.join(OUT, f"_scene{i}.jpg"))
+        cmd += ["-loop", "1", "-t", f"{durs[i]:.2f}", "-i", f]
+    parts = []
+    for i, dd in enumerate(durs):
+        n = int(dd * fps) + 1
+        parts.append(f"[{i}:v]scale=2160:3840,zoompan=z='min(1+0.0006*on,1.06)':x='iw/2-(iw/zoom/2)':"
+                     f"y='ih/2-(ih/zoom/2)':d={n}:s=1080x1920:fps={fps},trim=duration={dd:.2f},setpts=PTS-STARTPTS[v{i}]")
+    flt = ";".join(parts) + ";" + "".join(f"[v{i}]" for i in range(4)) + "concat=n=4:v=1:a=0,format=yuv420p[v]"
+    music = os.path.join(BASE, "music.mp3")
+    has_music = os.path.exists(music)
+    fade = f"afade=t=out:st={max(total - 1.5, 0):.2f}:d=1.5"
+    if voice and has_music:
+        cmd += ["-i", voice, "-stream_loop", "-1", "-i", music]
+        flt += f";[5:a]volume=0.12[m];[4:a][m]amix=inputs=2:duration=first:dropout_transition=0,{fade}[a]"
+        maps = ["-map", "[v]", "-map", "[a]"]
+    elif voice:
+        cmd += ["-i", voice]
+        maps = ["-map", "[v]", "-map", "4:a", "-af", fade]
+    elif has_music:
+        cmd += ["-stream_loop", "-1", "-i", music]
+        maps = ["-map", "[v]", "-map", "4:a", "-af", fade]
+    else:
+        maps = ["-map", "[v]"]
+    cmd += ["-filter_complex", flt] + maps
+    if voice or has_music:
+        cmd += ["-c:a", "aac", "-b:a", "128k"]
+    cmd += ["-t", f"{total:.2f}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+            "-movflags", "+faststart", out_path]
+    subprocess.run(cmd, check=True, capture_output=True)
+    return out_path
 
 
 def make_short(poster_path, out_path, seconds=12, voice=None):
@@ -1062,7 +1174,11 @@ def cmd_generate(force=False):
             except Exception as e:
                 log(f"Awaaz nahi bani, bina awaaz ka video banega: {str(e)[:100]}")
         try:
-            make_short(poster, vpath, voice=voice)
+            try:
+                make_story_short(data, photo, vpath, voice=voice)
+            except Exception as e:
+                log(f"4-scene video nahi bana ({str(e)[:80]}), poster video bana rahe hain")
+                make_short(poster, vpath, voice=voice)
             log("YouTube Short video ban gaya" + (" (Hindi awaaz ke saath)." if voice else "."))
         except Exception as e:
             log(f"Video nahi bana: {e}")
