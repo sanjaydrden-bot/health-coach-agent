@@ -1230,6 +1230,46 @@ def clone_count_this_week():
     return sum(1 for x in log_ if x.get("date", "") >= monday.isoformat()), log_
 
 
+def add_logo_to_video(path):
+    """Video ke upar-baayein kone mein logo (safed card par). Fail ho to video jaisa tha waisa."""
+    if C("VIDEO_LOGO", "yes").lower() != "yes":
+        return path
+    try:
+        import subprocess
+        import imageio_ffmpeg
+        logo = find_logo()
+        if not logo:
+            return path
+        ff = imageio_ffmpeg.get_ffmpeg_exe()
+        info = subprocess.run([ff, "-i", path], capture_output=True).stderr.decode(errors="ignore")
+        m = re.search(r"Video:.*?(\d{3,5})x(\d{3,5})", info)
+        vw = int(m.group(1)) if m else 1080
+        lw = max(120, int(vw * 0.2))
+        lg = logo.copy()
+        lg.thumbnail((lw, lw), Image.LANCZOS)
+        pad = max(8, lw // 16)
+        card = Image.new("RGBA", (lg.width + 2 * pad, lg.height + 2 * pad), (255, 255, 255, 235))
+        card.paste(lg, (pad, pad), lg)
+        png = path + ".logo.png"
+        card.save(png)
+        tmp = path + ".tmp.mp4"
+        cmd = [ff, "-y", "-i", path, "-i", png, "-filter_complex",
+               "[0:v][1:v]overlay=W*0.04:H*0.03",
+               "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-c:a", "copy", tmp]
+        r = subprocess.run(cmd, capture_output=True, timeout=600)
+        if r.returncode == 0 and os.path.getsize(tmp) > 10000:
+            os.replace(tmp, path)
+            log("Video par logo lag gaya.")
+        else:
+            log(f"Video par logo nahi laga: {r.stderr.decode(errors='ignore')[-200:]}")
+        for f in (png, tmp):
+            if os.path.exists(f):
+                os.remove(f)
+    except Exception as e:
+        log(f"Video logo skip: {str(e)[:120]}")
+    return path
+
+
 def make_clone_video(script, title, out_path):
     """HeyGen pe aapka clone script bolta hai -> 9:16 video download."""
     n, log_ = clone_count_this_week()
@@ -1265,6 +1305,7 @@ def make_clone_video(script, title, out_path):
                 f.write(requests.get(url, timeout=300).content)
             with open(out_path + ".heygen", "w") as f:
                 f.write(vid)
+            add_logo_to_video(out_path)
             log(f"Clone video download ho gaya ({st.get('duration', '?')} sec).")
             return out_path
         if status == "failed":
@@ -1409,13 +1450,33 @@ def _carousel_slides(data):
     return sl[:4]
 
 
-def _slide_base(d, img, n, total):
-    d.rectangle([0, 0, W, 18], fill=GREEN)
+_LOGO_CACHE = []
+
+
+def _paste_logo(d, img, x, y, maxw=300, maxh=96):
+    """Logo safed card par chipkao. Logo na mile to naam wala chip."""
+    if not _LOGO_CACHE:
+        _LOGO_CACHE.append(find_logo())
+    logo = _LOGO_CACHE[0]
+    if logo:
+        lg = logo.copy()
+        lg.thumbnail((maxw, maxh), Image.LANCZOS)
+        d.rounded_rectangle([x, y, x + lg.width + 28, y + lg.height + 16], 16, fill="white",
+                            outline=(226, 232, 240), width=2)
+        img.paste(lg, (x + 14, y + 8), lg)
+        return y + lg.height + 16
     fb = font(True, 30)
     chip = "THE HEALTH COACH"
     cw = d.textlength(chip, font=fb)
-    d.rounded_rectangle([56, 60, 56 + cw + 44, 116], 28, fill=DARK)
-    d.text((78, 68), chip, font=fb, fill="white")
+    d.rounded_rectangle([x, y, x + cw + 44, y + 56], 28, fill=DARK)
+    d.text((x + 22, y + 8), chip, font=fb, fill="white")
+    return y + 56
+
+
+def _slide_base(d, img, n, total):
+    d.rectangle([0, 0, W, 18], fill=GREEN)
+    fb = font(True, 30)
+    _paste_logo(d, img, 48, 36, 360, 136)
     pg = f"{n}/{total}"
     d.text((W - 60 - d.textlength(pg, font=fb), 70), pg, font=fb, fill=(100, 116, 139))
     f2 = font(False, 30)
@@ -1445,11 +1506,11 @@ def make_carousel(data, photo_path, prefix):
     if photo_path:
         try:
             ph = ImageOps.fit(Image.open(photo_path).convert("RGB"), (W, 560), Image.LANCZOS)
-            img.paste(ph, (0, 150))
+            img.paste(ph, (0, 200))
         except Exception:
             pass
     _slide_base(d, img, 1, total)
-    y = 760
+    y = 790
     for size in (86, 76, 66, 58):
         ft = font(True, size)
         if len(wrap(d, data["poster_title"], ft, W - 130)) <= 3:
@@ -1465,8 +1526,8 @@ def make_carousel(data, photo_path, prefix):
         d = ImageDraw.Draw(img)
         _slide_base(d, img, i + 2, total)
         fnum = font(True, 150)
-        d.text((64, 190), f"{i + 1:02d}", font=fnum, fill=GREEN)
-        y = _block(d, sl["title"], font(True, 80), 64, 430, W - 130, DARK, 1.12, 3)
+        d.text((64, 215), f"{i + 1:02d}", font=fnum, fill=GREEN)
+        y = _block(d, sl["title"], font(True, 80), 64, 450, W - 130, DARK, 1.12, 3)
         d.rectangle([64, y + 18, 220, y + 28], fill=ORANGE)
         _block(d, sl.get("text", ""), font(False, 56), 64, y + 80, W - 130, (31, 41, 55), 1.4, 9)
         paths.append(f"{prefix}_c{i + 2}.jpg"); img.save(paths[-1], quality=92)
@@ -1484,12 +1545,7 @@ def make_carousel(data, photo_path, prefix):
     d.rounded_rectangle([64, y, W - 64, y + 150], 30, fill=ORANGE)
     _block(d, "Consultation ke liye DM karein", font(True, 46), 100, y + 22, W - 200, "white")
     _block(d, "Call / WhatsApp " + C("PHONE", "8982264044"), font(False, 40), 100, y + 84, W - 200, "white")
-    logo = find_logo()
-    if logo:
-        lg = logo.copy(); lg.thumbnail((360, 130), Image.LANCZOS)
-        cx, cy = 64, H - 210
-        d.rounded_rectangle([cx, cy, cx + lg.width + 28, cy + lg.height + 16], 16, fill="white")
-        img.paste(lg, (cx + 14, cy + 8), lg)
+    _paste_logo(d, img, 64, H - 210, 360, 130)
     d.text((W - 64 - d.textlength(C("WEBSITE", "thehealthcoach.in"), font=font(False, 32)), H - 120),
            C("WEBSITE", "thehealthcoach.in"), font=font(False, 32), fill=(203, 213, 225))
     paths.append(f"{prefix}_c{total}.jpg"); img.save(paths[-1], quality=92)
