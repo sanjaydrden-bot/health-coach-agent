@@ -279,6 +279,7 @@ Reply with ONLY this JSON, nothing else:
   "points": ["tip 1, max 8 words", "tip 2, max 8 words", "tip 3, max 8 words"],
   "caption": "full caption text without hashtags",
   "hashtags": "#tag1 #tag2 ...",
+  "carousel": [{{"title": "slide heading in Hinglish Roman, max 6 words", "text": "1-2 short lines in Hinglish Roman, max 22 words"}}, "... EXACTLY 4 slides that teach the topic step by step (for MYTH style: myth, why people believe it, the real fact, what to do; for RECIPE style: ingredients, method, when to eat, extra tip)"],
   "photo_query": "2-4 English words to search a bright, positive stock photo (no doctors, no medicines, no sick people)",
   "scenes": {{"hook": "on-screen HOOK question in Hinglish Roman, max 10 words, e.g. Kya aapka bhi subah pet saaf nahi hota?", "problem": "on-screen PROBLEM line that names the viewer's pain, max 10 words, e.g. Constipation ki wajah se aap pareshan hain?", "solution": "on-screen SOLUTION line with the key tips, max 14 words, e.g. Fiber, adequate water aur physical activity par dhyan dein.", "cta": "Aise hi health tips ke liye The Health Coach ko subscribe karein, aur consultation ke liye DM karein."}},
   "video_script": "a 25-35 second SPOKEN script (60-85 words) in natural Hinglish written in Roman letters, in EXACTLY this order: 1) HOOK - the hook question, 2) PROBLEM - relate to the viewer's pain, 3) SOLUTION - the 3 tips in simple words, 4) CTA - Aise hi health tips ke liye The Health Coach ko subscribe karein, aur consultation ke liye DM karein. No emojis, no hashtags, no headings.",
@@ -1400,6 +1401,124 @@ def cmd_performance(force_strategy=False):
 
 
 # ------------------------------------------------------------------ commands
+# ------------------------------------------------------------------ CAROUSEL (6 slide)
+def _carousel_slides(data):
+    sl = [x for x in (data.get("carousel") or []) if isinstance(x, dict) and x.get("title")]
+    if len(sl) < 3:  # AI ne nahi diya to points se bana lo
+        sl = [{"title": f"Tip {i + 1}", "text": p} for i, p in enumerate(data.get("points", [])[:4])]
+    return sl[:4]
+
+
+def _slide_base(d, img, n, total):
+    d.rectangle([0, 0, W, 18], fill=GREEN)
+    fb = font(True, 30)
+    chip = "THE HEALTH COACH"
+    cw = d.textlength(chip, font=fb)
+    d.rounded_rectangle([56, 60, 56 + cw + 44, 116], 28, fill=DARK)
+    d.text((78, 68), chip, font=fb, fill="white")
+    pg = f"{n}/{total}"
+    d.text((W - 60 - d.textlength(pg, font=fb), 70), pg, font=fb, fill=(100, 116, 139))
+    f2 = font(False, 30)
+    site = C("WEBSITE", "thehealthcoach.in")
+    d.rectangle([0, H - 110, W, H], fill=DARK)
+    d.text((56, H - 74), site, font=f2, fill=(203, 213, 225))
+    if n < total:
+        sw = "Swipe karein  >>"
+        d.text((W - 56 - d.textlength(sw, font=f2), H - 74), sw, font=f2, fill=ORANGE)
+
+
+def _block(d, text, f, x, y, maxw, fill, gap=1.25, maxlines=8):
+    for ln in wrap(d, text, f, maxw)[:maxlines]:
+        d.text((x, y), ln, font=f, fill=fill)
+        y += int(f.size * gap)
+    return y
+
+
+def make_carousel(data, photo_path, prefix):
+    """6 slide: cover + 4 seekh + CTA. Files: <prefix>_c1.jpg ... _c6.jpg"""
+    slides = _carousel_slides(data)
+    total = len(slides) + 2
+    paths = []
+    # 1. cover
+    img = Image.new("RGB", (W, H), CREAM)
+    d = ImageDraw.Draw(img)
+    if photo_path:
+        try:
+            ph = ImageOps.fit(Image.open(photo_path).convert("RGB"), (W, 560), Image.LANCZOS)
+            img.paste(ph, (0, 150))
+        except Exception:
+            pass
+    _slide_base(d, img, 1, total)
+    y = 760
+    for size in (86, 76, 66, 58):
+        ft = font(True, size)
+        if len(wrap(d, data["poster_title"], ft, W - 130)) <= 3:
+            break
+    y = _block(d, data["poster_title"], ft, 64, y, W - 130, DARK, 1.12, 3)
+    d.rectangle([64, y + 16, 220, y + 26], fill=ORANGE)
+    sub = (data.get("scenes") or {}).get("hook") or "Poora padhiye aur save kariye"
+    _block(d, sub, font(False, 40), 64, y + 60, W - 130, (51, 65, 85), 1.25, 3)
+    paths.append(f"{prefix}_c1.jpg"); img.save(paths[-1], quality=92)
+    # 2..5 content
+    for i, sl in enumerate(slides):
+        img = Image.new("RGB", (W, H), CREAM if i % 2 == 0 else (240, 253, 244))
+        d = ImageDraw.Draw(img)
+        _slide_base(d, img, i + 2, total)
+        fnum = font(True, 150)
+        d.text((64, 190), f"{i + 1:02d}", font=fnum, fill=GREEN)
+        y = _block(d, sl["title"], font(True, 80), 64, 430, W - 130, DARK, 1.12, 3)
+        d.rectangle([64, y + 18, 220, y + 28], fill=ORANGE)
+        _block(d, sl.get("text", ""), font(False, 56), 64, y + 80, W - 130, (31, 41, 55), 1.4, 9)
+        paths.append(f"{prefix}_c{i + 2}.jpg"); img.save(paths[-1], quality=92)
+    # last CTA
+    img = Image.new("RGB", (W, H), DARK)
+    d = ImageDraw.Draw(img)
+    d.rectangle([0, 0, W, 18], fill=ORANGE)
+    y = _block(d, "Kaam ki lagi ye jaankari?", font(True, 78), 64, 260, W - 130, "white", 1.12, 3)
+    y += 40
+    for ln in ("SAVE karein - baad mein kaam aayegi", "SHARE karein - apno ki sehat ke liye",
+               "FOLLOW karein - roz ek naya health tip"):
+        d.ellipse([64, y + 6, 104, y + 46], fill=GREEN)
+        y = _block(d, ln, font(False, 44), 130, y, W - 200, (226, 232, 240), 1.3, 2) + 28
+    y += 30
+    d.rounded_rectangle([64, y, W - 64, y + 150], 30, fill=ORANGE)
+    _block(d, "Consultation ke liye DM karein", font(True, 46), 100, y + 22, W - 200, "white")
+    _block(d, "Call / WhatsApp " + C("PHONE", "8982264044"), font(False, 40), 100, y + 84, W - 200, "white")
+    logo = find_logo()
+    if logo:
+        lg = logo.copy(); lg.thumbnail((360, 130), Image.LANCZOS)
+        cx, cy = 64, H - 210
+        d.rounded_rectangle([cx, cy, cx + lg.width + 28, cy + lg.height + 16], 16, fill="white")
+        img.paste(lg, (cx + 14, cy + 8), lg)
+    d.text((W - 64 - d.textlength(C("WEBSITE", "thehealthcoach.in"), font=font(False, 32)), H - 120),
+           C("WEBSITE", "thehealthcoach.in"), font=font(False, 32), fill=(203, 213, 225))
+    paths.append(f"{prefix}_c{total}.jpg"); img.save(paths[-1], quality=92)
+    return paths
+
+
+def carousel_links(paths):
+    repo = os.environ.get("GITHUB_REPOSITORY") or C("GITHUB_REPO", "sanjaydrden-bot/health-coach-agent")
+    return [f"https://raw.githubusercontent.com/{repo}/main/posts/{os.path.basename(p)}" for p in paths]
+
+
+def ig_carousel(urls, caption):
+    """Instagram carousel (Meta judne ke baad). urls = public image links."""
+    ig = C("IG_USER_ID")
+    kids = []
+    for u in urls[:10]:
+        kids.append(graph("POST", f"{ig}/media", data={"image_url": u, "is_carousel_item": "true"})["id"])
+    c = graph("POST", f"{ig}/media", data={"media_type": "CAROUSEL", "children": ",".join(kids), "caption": caption})
+    cid = c["id"]
+    for _ in range(30):
+        st = graph("GET", cid, params={"fields": "status_code"}).get("status_code")
+        if st == "FINISHED":
+            break
+        if st == "ERROR":
+            raise RuntimeError("Instagram ne carousel process nahi kiya")
+        time.sleep(5)
+    return graph("POST", f"{ig}/media_publish", data={"creation_id": cid})["id"]
+
+
 def cmd_generate(force=False):
     os.makedirs(OUT, exist_ok=True)
     today = dt.date.today().isoformat()
@@ -1415,6 +1534,13 @@ def cmd_generate(force=False):
     caption = data["caption"].strip() + "\n\n" + data.get("hashtags", "").strip()
     with open(os.path.join(OUT, f"{today}.txt"), "w", encoding="utf-8") as f:
         f.write(caption)
+    car_urls = []
+    if C("CAROUSEL", "yes").lower() == "yes":
+        try:
+            car_urls = carousel_links(make_carousel(data, photo, os.path.join(OUT, today)))
+            log(f"Carousel ban gaya ({len(car_urls)} slide).")
+        except Exception as e:
+            log(f"Carousel nahi bana: {str(e)[:120]}")
     video_kind, vb64 = "poster", ""
     vpath = os.path.join(OUT, f"{today}.mp4")
     if heygen_ready() and clone_day_today():
@@ -1469,9 +1595,11 @@ def cmd_generate(force=False):
     why = data.get("why_today", "")
     if data.get("source") and data["source"] not in ("season", why):
         why += f"  [Source: {data['source']}]"
+    if car_urls:
+        why += f"  [Carousel {len(car_urls)} slide: {car_urls[0].rsplit('_c', 1)[0]}_c1.jpg ... _c{len(car_urls)}.jpg]"
     sheet("add", date=today, topic=data["topic"], title=data["poster_title"],
           why=why, caption=caption, image_url=url, photo_id=pid, img_b64=b64,
-          video_kind=video_kind, video_b64=vb64)
+          video_kind=video_kind, video_b64=vb64, carousel=car_urls)
     h = load_history()
     h["topics"].append(data["topic"])
     save_history(h)
@@ -1550,11 +1678,21 @@ def cmd_publish():
             except Exception as e:
                 errors.append(f"FB: {e}")
         if want_ig:
-            try:
-                ig_id = publish_instagram(photo_url(pid), cap)
-                log(f"Instagram pe post ho gaya: {ig_id}")
-            except Exception as e:
-                errors.append(f"IG: {e}")
+            import glob
+            car = sorted(glob.glob(os.path.join(OUT, f"{row.get('date', '')}_c*.jpg")),
+                         key=lambda x: int(re.search(r"_c(\d+)\.jpg$", x).group(1)))
+            if C("CAROUSEL_ON_IG", "yes").lower() == "yes" and len(car) >= 3:
+                try:
+                    ig_id = ig_carousel(carousel_links(car), cap)
+                    log(f"Instagram pe carousel post ho gaya: {ig_id}")
+                except Exception as e:
+                    log(f"Carousel nahi gaya ({str(e)[:80]}), single poster bhej rahe hain")
+            if not ig_id:
+                try:
+                    ig_id = publish_instagram(photo_url(pid), cap)
+                    log(f"Instagram pe post ho gaya: {ig_id}")
+                except Exception as e:
+                    errors.append(f"IG: {e}")
         yt_id = row.get("yt_id") or ""
         video = os.path.join(OUT, f"{row.get('date', '')}.mp4")
         if C("POST_TO_YOUTUBE", "yes").lower() == "yes" and not yt_id and os.path.exists(video):
