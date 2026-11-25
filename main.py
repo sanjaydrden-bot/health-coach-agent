@@ -251,6 +251,15 @@ festivals instead. Never spread panic or unverified claims; turn news into calm,
 STEP 2 - pick ONE topic for today's Instagram post.
 Do NOT repeat any of these recent topics: {recent}
 
+TODAY'S CONTENT STYLE: {style}
+
+Content rules learnt from top Indian health pages:
+- ONE problem per post. Name it clearly (kabz, acidity, thyroid, sugar, BP, weight, neend, joint pain...)
+  so the viewer instantly feels "ye to meri problem hai". Never mix several problems.
+- Local touch: talk like a caring elder from Indore/MP - simple Hindi bolchaal, ghar ka khana,
+  rasoi ki cheezein, local season and festivals. Indian foods only (dal, roti, sabzi, chaas, poha...).
+- Credibility: calm, evidence-based, no big promises (no "X kg in Y days", no "100% cure").
+
 Rules:
 - Practical, safe, evidence-based lifestyle tips only. No medicine names, no doses,
   no "cure" claims, no fear-mongering.
@@ -271,8 +280,8 @@ Reply with ONLY this JSON, nothing else:
   "caption": "full caption text without hashtags",
   "hashtags": "#tag1 #tag2 ...",
   "photo_query": "2-4 English words to search a bright, positive stock photo (no doctors, no medicines, no sick people)",
-  "scenes": {{"hook": "on-screen HOOK question in Hinglish Roman, max 10 words, e.g. Kya aapka bhi subah pet saaf nahi hota?", "problem": "on-screen PROBLEM line that names the viewer's pain, max 10 words, e.g. Constipation ki wajah se aap pareshan hain?", "solution": "on-screen SOLUTION line with the key tips, max 14 words, e.g. Fiber, adequate water aur physical activity par dhyan dein.", "cta": "Aise hi health tips ke liye The Health Coach ko subscribe karein."}},
-  "video_script": "a 25-35 second SPOKEN script (60-85 words) in natural Hinglish written in Roman letters, in EXACTLY this order: 1) HOOK - the hook question, 2) PROBLEM - relate to the viewer's pain, 3) SOLUTION - the 3 tips in simple words, 4) CTA - Aise hi health tips ke liye The Health Coach ko subscribe karein. No emojis, no hashtags, no headings.",
+  "scenes": {{"hook": "on-screen HOOK question in Hinglish Roman, max 10 words, e.g. Kya aapka bhi subah pet saaf nahi hota?", "problem": "on-screen PROBLEM line that names the viewer's pain, max 10 words, e.g. Constipation ki wajah se aap pareshan hain?", "solution": "on-screen SOLUTION line with the key tips, max 14 words, e.g. Fiber, adequate water aur physical activity par dhyan dein.", "cta": "Aise hi health tips ke liye The Health Coach ko subscribe karein, aur consultation ke liye DM karein."}},
+  "video_script": "a 25-35 second SPOKEN script (60-85 words) in natural Hinglish written in Roman letters, in EXACTLY this order: 1) HOOK - the hook question, 2) PROBLEM - relate to the viewer's pain, 3) SOLUTION - the 3 tips in simple words, 4) CTA - Aise hi health tips ke liye The Health Coach ko subscribe karein, aur consultation ke liye DM karein. No emojis, no hashtags, no headings.",
   "voice_parts": ["spoken HOOK part", "spoken PROBLEM part", "spoken SOLUTION part", "spoken CTA part"],
   "voice_script_hi": "the SAME spoken script (same 4 parts, same order) written in Devanagari Hindi script for a Hindi text-to-speech voice (write common English words like protein, vitamin, subscribe in Devanagari too). No emojis."}}"""
 
@@ -338,6 +347,25 @@ def parse_content(text):
 
 RESEARCH_SUMMARY = {}
 
+STYLES = {
+    "problem": "PROBLEM -> SOLUTION. Pick one common problem and give 3 simple daily-habit fixes.",
+    "myth": ("MYTH vs FACT. Pick one popular health myth Indians believe (e.g. 'ghee se mota hote hain', "
+             "'chawal band karo to weight kam'). Hook = the myth as a question; Problem = why people believe it; "
+             "Solution = the real fact + 2 practical tips. Poster title should start with 'Myth ya Sach?'."),
+    "recipe": ("EASY HEALTHY RECIPE / GHAR KA NUSKHA for one problem (e.g. 'kabz ke liye 2 minute ka nashta'). "
+               "Use common Indian kitchen items. The 3 points = ingredients/steps in short; caption gives the simple method. "
+               "Safe food only, no herbs-as-medicine claims."),
+}
+# Mon/Wed/Fri = clone video din (problem), Tue/Sat = myth, Thu/Sun = recipe. config.ini mein STYLE_PLAN se badal sakte hain.
+DEFAULT_STYLE_PLAN = "problem,myth,problem,recipe,problem,myth,recipe"
+
+
+def today_style():
+    plan = [x.strip().lower() for x in C("STYLE_PLAN", DEFAULT_STYLE_PLAN).split(",")]
+    if len(plan) != 7:
+        plan = DEFAULT_STYLE_PLAN.split(",")
+    return STYLES.get(plan[dt.date.today().weekday()], STYLES["problem"])
+
 
 def make_content():
     h = load_history()
@@ -356,6 +384,7 @@ def make_content():
     prompt = PROMPT.replace("{research}", research_text(res).replace("{", "(").replace("}", ")")).format(
         today=dt.date.today().strftime("%d %B %Y, %A"),
         recent=", ".join(h["topics"][-30:]) or "none",
+        style=today_style(),
         phone=C("PHONE", "8982264044"))
     if C("USE_GOOGLE_SEARCH", "no").lower() == "yes":
         try:
@@ -630,7 +659,7 @@ def story_scenes(data):
         ("SAWAL", sc.get("hook") or (data.get("poster_title", "").rstrip("?") + "?")),
         ("PROBLEM", sc.get("problem") or data.get("why_today") or data.get("topic", "")),
         ("SOLUTION", sc.get("solution") or " | ".join(pts[:3])),
-        ("SUBSCRIBE", sc.get("cta") or "Aise hi health tips ke liye The Health Coach ko subscribe karein."),
+        ("SUBSCRIBE", sc.get("cta") or "Aise hi health tips ke liye The Health Coach ko subscribe karein, aur consultation ke liye DM karein."),
     ]
 
 
@@ -734,7 +763,7 @@ def make_story_short(data, photo_path, out_path, voice=None):
 
 PART_LABELS = {"hook": 0, "sawal": 0, "problem": 1, "solution": 2, "hal": 2, "upay": 2,
                "cta": 3, "subscribe": 3}
-DEFAULT_CTA = "Aise hi health tips ke liye The Health Coach ko subscribe karein."
+DEFAULT_CTA = "Aise hi health tips ke liye The Health Coach ko subscribe karein, aur consultation ke liye DM karein."
 
 
 def parse_script(text):
